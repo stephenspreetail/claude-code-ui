@@ -17,11 +17,11 @@ function RootLayout() {
     >
       <Box px="5" py="5" style={{ maxWidth: "1800px", margin: "0 auto" }}>
         <Flex direction="column" gap="5">
-          <Flex align="baseline" gap="3">
+          <Flex align="center" gap="3">
             <Heading size="8" weight="bold">
               Sessions
             </Heading>
-            <Text size="3" color="violet">
+            <Text size="2" color="gray" style={{ marginTop: "8px" }}>
               Claude Code
             </Text>
           </Flex>
