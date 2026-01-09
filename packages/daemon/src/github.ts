@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import fastq from "fastq";
 import type { queueAsPromised } from "fastq";
 import type { PRInfo, CIStatus } from "./schema.js";
+import { log, logError } from "./log.js";
 
 const defaultExecAsync = promisify(exec);
 
@@ -92,7 +93,7 @@ async function checkPRForBranch(cwd: string, branch: string, sessionId: string):
 
     const prs = JSON.parse(stdout);
     if (prs.length === 0) {
-      console.log(`[PR] No PR found for branch: ${branch}`);
+      log("PR", `No PR found for branch: ${branch}`);
       prCache.set(cacheKey, { pr: null, lastChecked: Date.now() });
       if (onPRUpdate) {
         onPRUpdate(sessionId, null);
@@ -101,7 +102,7 @@ async function checkPRForBranch(cwd: string, branch: string, sessionId: string):
     }
 
     const pr = prs[0];
-    console.log(`[PR] Found PR #${pr.number} for branch: ${branch}`);
+    log("PR", `Found PR #${pr.number} for branch: ${branch}`);
 
     // Get CI status for this PR
     const ciInfo = await getCIStatus(cwd, pr.number);
@@ -127,7 +128,7 @@ async function checkPRForBranch(cwd: string, branch: string, sessionId: string):
     }
   } catch (error) {
     // gh CLI not available or not in a git repo
-    console.error(`Failed to check PR for ${branch}:`, (error as Error).message);
+    logError("PR", `Failed to check PR for ${branch}`, error as Error);
     prCache.set(cacheKey, { pr: null, lastChecked: Date.now() });
   }
 }
@@ -171,10 +172,10 @@ async function getCIStatus(cwd: string, prNumber: number): Promise<{
       overallStatus = "unknown";
     }
 
-    console.log(`[PR] CI status for PR #${prNumber}: ${overallStatus} (${mappedChecks.length} checks)`);
+    log("PR", `CI status for PR #${prNumber}: ${overallStatus} (${mappedChecks.length} checks)`);
     return { overallStatus, checks: mappedChecks };
   } catch (error) {
-    console.error(`Failed to get CI status for PR #${prNumber}:`, (error as Error).message);
+    logError("PR", `Failed to get CI status for PR #${prNumber}`, error as Error);
     return { overallStatus: "unknown", checks: [] };
   }
 }
@@ -242,7 +243,7 @@ async function checkCIStatus(cwd: string, prNumber: number, sessionId: string): 
       startIdleCIPolling(cwd, prNumber, sessionId);
     }
   } catch (error) {
-    console.error(`Failed to check CI for PR #${prNumber}:`, (error as Error).message);
+    logError("PR", `Failed to check CI for PR #${prNumber}`, error as Error);
   }
 }
 
@@ -289,7 +290,7 @@ function stopCIPolling(sessionId: string): void {
  */
 export function queuePRCheck(cwd: string, branch: string, sessionId: string): void {
   if (!branch) return;
-  console.log(`[PR] Queueing PR check for branch: ${branch}`);
+  log("PR", `Queueing PR check for branch: ${branch}`);
   queue.push({ type: "check_pr", cwd, branch, sessionId });
 }
 
@@ -322,7 +323,7 @@ export function clearPRForSession(sessionId: string, oldBranch: string | null, c
   if (oldBranch) {
     const cacheKey = `${cwd}:${oldBranch}`;
     prCache.delete(cacheKey);
-    console.log(`[PR] Cleared cache for old branch: ${oldBranch}`);
+    log("PR", `Cleared cache for old branch: ${oldBranch}`);
   }
 }
 

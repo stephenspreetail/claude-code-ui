@@ -1,4 +1,4 @@
-import { Card, Flex, Text, Code, Box, HoverCard, Badge } from "@radix-ui/themes";
+import { Card, Flex, Text, Code, Box, HoverCard, Badge, Heading } from "@radix-ui/themes";
 import type { Session, CIStatus } from "../data/schema";
 
 interface SessionCardProps {
@@ -116,7 +116,7 @@ export function SessionCard({ session, disableHover }: SessionCardProps) {
     <HoverCard.Root openDelay={750} open={disableHover ? false : undefined}>
       <HoverCard.Trigger>
         <Card size="2" className={getCardClass(session)}>
-          <Flex direction="column" gap="2">
+          <Flex direction="column" gap="4">
             {/* Header: directory and time */}
             <Flex justify="between" align="center">
               <Text size="1" color="gray" style={{ fontFamily: "var(--code-font-family)" }}>
@@ -128,9 +128,9 @@ export function SessionCard({ session, disableHover }: SessionCardProps) {
             </Flex>
 
             {/* Main content: goal as primary text */}
-            <Text size="2" weight="medium" highContrast mb="1">
+            <Heading size="3" weight="medium" highContrast>
               {session.goal || session.originalPrompt.slice(0, 50)}
-            </Text>
+            </Heading>
 
             {/* Secondary: current activity (pending tool or summary) */}
             {showPendingTool ? (
@@ -182,12 +182,14 @@ export function SessionCard({ session, disableHover }: SessionCardProps) {
       <HoverCard.Content size="3" style={{ minWidth: "600px", minHeight: "400px" }}>
         <Flex direction="column" gap="3" style={{ height: "100%" }}>
           {/* Header: goal */}
-          <Text size="2" weight="bold" highContrast>
+          <Heading size="3" weight="bold" highContrast>
             {session.goal || session.originalPrompt.slice(0, 60)}
-          </Text>
+          </Heading>
 
           {/* Recent output */}
-          <Box
+          <Flex
+            direction="column"
+            gap="3"
             p="3"
             flexGrow="1"
             style={{
@@ -222,7 +224,7 @@ export function SessionCard({ session, disableHover }: SessionCardProps) {
             {session.status === "working" && (
               <Text color="grass" size="1">█</Text>
             )}
-          </Box>
+          </Flex>
 
           {/* PR Info if available */}
           {session.pr && (
@@ -265,6 +267,6 @@ export function SessionCard({ session, disableHover }: SessionCardProps) {
           </Flex>
         </Flex>
       </HoverCard.Content>
-    </HoverCard.Root>
+    </HoverCard.Root >
   );
 }

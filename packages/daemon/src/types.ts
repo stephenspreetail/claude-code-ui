@@ -25,7 +25,11 @@ export interface UserEntry extends BaseMessageEntry {
   type: "user";
   message: {
     role: "user";
-    content: string | ToolResultBlock[];
+    // Content can be:
+    // - string: simple text prompt
+    // - ToolResultBlock[]: tool results
+    // - UserContentBlock[]: multimodal prompt (text + images)
+    content: string | UserContentBlock[];
   };
   toolUseResult?: string;
   thinkingMetadata?: {
@@ -34,6 +38,18 @@ export interface UserEntry extends BaseMessageEntry {
     triggers: string[];
   };
   todos?: TodoItem[];
+}
+
+// User message content blocks (for multimodal prompts)
+export type UserContentBlock = TextBlock | ToolResultBlock | ImageBlock;
+
+export interface ImageBlock {
+  type: "image";
+  source: {
+    type: "base64";
+    media_type: string;
+    data: string;
+  };
 }
 
 // Assistant entry - Claude responses

@@ -10,15 +10,13 @@ import type { SessionState } from "./watcher.js";
 import type { LogEntry } from "./types.js";
 import { generateAISummary, generateGoal } from "./summarizer.js";
 import { queuePRCheck, getCachedPR, setOnPRUpdate, stopAllPolling, clearPRForSession } from "./github.js";
-import path from "node:path";
-import os from "node:os";
+import { log } from "./log.js";
 
 const DEFAULT_PORT = 4450;
 const SESSIONS_STREAM_PATH = "/sessions";
 
 export interface StreamServerOptions {
   port?: number;
-  dataDir?: string;
 }
 
 export class StreamServer {
@@ -31,12 +29,11 @@ export class StreamServer {
 
   constructor(options: StreamServerOptions = {}) {
     this.port = options.port ?? DEFAULT_PORT;
-    const dataDir = options.dataDir ?? path.join(os.homedir(), ".claude-code-ui", "streams");
 
+    // Use in-memory storage during development (no dataDir = in-memory)
     this.server = new DurableStreamTestServer({
       port: this.port,
       host: "127.0.0.1",
-      dataDir,
     });
 
     this.streamUrl = `http://127.0.0.1:${this.port}${SESSIONS_STREAM_PATH}`;
@@ -44,7 +41,7 @@ export class StreamServer {
 
   async start(): Promise<void> {
     await this.server.start();
-    console.log(`Durable Streams server running on http://127.0.0.1:${this.port}`);
+    log("Server", `Durable Streams server running on http://127.0.0.1:${this.port}`);
 
     // Create or connect to the sessions stream
     try {
@@ -63,12 +60,12 @@ export class StreamServer {
 
     // Set up PR update callback
     setOnPRUpdate(async (sessionId, pr) => {
-      console.log(`[PR] Received PR update for session ${sessionId.slice(0, 8)}: ${pr ? `PR #${pr.number}` : "no PR"}`);
+      log("PR", `Received PR update for session ${sessionId.slice(0, 8)}: ${pr ? `PR #${pr.number}` : "no PR"}`);
       const sessionState = this.sessionCache.get(sessionId);
       if (sessionState) {
         await this.publishSessionWithPR(sessionState, pr);
       } else {
-        console.log(`[PR] No cached session state for ${sessionId.slice(0, 8)}`);
+        log("PR", `No cached session state for ${sessionId.slice(0, 8)}`);
       }
     });
   }
@@ -97,7 +94,7 @@ export class StreamServer {
     const branchChanged = oldBranch !== null && oldBranch !== sessionState.gitBranch;
 
     if (branchChanged) {
-      console.log(`[PR] Branch changed for ${sessionState.sessionId.slice(0, 8)}: ${oldBranch} → ${sessionState.gitBranch}`);
+      log("PR", `Branch changed for ${sessionState.sessionId.slice(0, 8)}: ${oldBranch} → ${sessionState.gitBranch}`);
       clearPRForSession(sessionState.sessionId, oldBranch, sessionState.cwd);
     }
 
@@ -117,10 +114,10 @@ export class StreamServer {
 
     // Queue PR check if we have a branch (will update via callback)
     if (sessionState.gitBranch) {
-      console.log(`[PR] Session ${sessionState.sessionId.slice(0, 8)} has branch: ${sessionState.gitBranch}`);
+      log("PR", `Session ${sessionState.sessionId.slice(0, 8)} has branch: ${sessionState.gitBranch}`);
       queuePRCheck(sessionState.cwd, sessionState.gitBranch, sessionState.sessionId);
     } else {
-      console.log(`[PR] Session ${sessionState.sessionId.slice(0, 8)} has no branch`);
+      log("PR", `Session ${sessionState.sessionId.slice(0, 8)} has no branch`);
     }
 
     const session: Session = {

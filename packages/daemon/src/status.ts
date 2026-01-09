@@ -25,11 +25,7 @@ export function deriveStatus(
 ): StatusResult {
   // Use the state machine for status derivation
   const { status: machineStatus, context } = deriveStatusFromMachine(entries);
-  const result = machineStatusToResult(machineStatus, context);
-
-  console.log(`[Status] Machine: state=${machineStatus}, hasPendingToolUse=${context.hasPendingToolUse}, messageCount=${context.messageCount}`);
-
-  return result;
+  return machineStatusToResult(machineStatus, context);
 }
 
 /**

@@ -9,6 +9,7 @@ import {
 import { deriveStatus, statusChanged } from "./status.js";
 import { getGitInfoCached, type GitInfo } from "./git.js";
 import type { LogEntry, SessionMetadata, StatusResult } from "./types.js";
+import { log } from "./log.js";
 
 const CLAUDE_PROJECTS_DIR = `${process.env.HOME}/.claude/projects`;
 
@@ -60,6 +61,7 @@ export class SessionWatcher extends EventEmitter {
     this.watcher
       .on("add", (path) => {
         if (!path.endsWith(".jsonl")) return;
+        log("Watcher", `New file detected: ${path.split("/").slice(-2).join("/")}`);
         this.handleFile(path, "add");
       })
       .on("change", (path) => {
@@ -171,7 +173,7 @@ export class SessionWatcher extends EventEmitter {
         if (currentBranch.branch !== existingSession.gitBranch) {
           gitInfo = currentBranch;
           branchChanged = true;
-          console.log(`[Watcher] Branch changed for ${sessionId}: ${existingSession.gitBranch} → ${currentBranch.branch}`);
+          log("Watcher", `Branch changed for ${sessionId}: ${existingSession.gitBranch} → ${currentBranch.branch}`);
         }
       }
 
@@ -217,6 +219,10 @@ export class SessionWatcher extends EventEmitter {
         } satisfies SessionEvent);
       }
     } catch (error) {
+      // Ignore ENOENT errors - file may have been deleted
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return;
+      }
       this.emit("error", error);
     }
   }

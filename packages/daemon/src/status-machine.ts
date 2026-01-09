@@ -68,6 +68,15 @@ export const statusMachine = setup({
     },
     working: {
       on: {
+        USER_PROMPT: {
+          // Another user prompt while working (e.g., turn ended without system event)
+          actions: ({ context, event }) => {
+            context.lastActivityAt = event.timestamp;
+            context.messageCount += 1;
+            context.hasPendingToolUse = false;
+            context.pendingToolIds = [];
+          },
+        },
         ASSISTANT_STREAMING: {
           actions: ({ context, event }) => {
             context.lastActivityAt = event.timestamp;
@@ -162,15 +171,20 @@ export function logEntryToEvent(entry: LogEntry): StatusEvent | null {
     const content = userEntry.message.content;
 
     if (typeof content === "string") {
-      // Human prompt
+      // Human prompt (string form)
       return { type: "USER_PROMPT", timestamp: userEntry.timestamp };
     } else if (Array.isArray(content)) {
-      // Tool result(s)
+      // Check for tool results first
       const toolUseIds = content
         .filter((b) => b.type === "tool_result")
         .map((b) => b.tool_use_id);
       if (toolUseIds.length > 0) {
         return { type: "TOOL_RESULT", timestamp: userEntry.timestamp, toolUseIds };
+      }
+      // Check for text blocks (user prompt in array form with images, etc.)
+      const hasTextBlock = content.some((b) => b.type === "text");
+      if (hasTextBlock) {
+        return { type: "USER_PROMPT", timestamp: userEntry.timestamp };
       }
     }
   }
