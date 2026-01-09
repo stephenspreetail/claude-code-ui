@@ -16,6 +16,7 @@ if [ -n "$SESSION_ID" ]; then
   # Write stop signal with timestamp
   echo "$INPUT" | jq -c '. + {stopped_at: (now | tostring)}' > "$SIGNALS_DIR/$SESSION_ID.stop.json"
 
-  # Clear any pending permission since the turn ended
+  # Clear working and permission signals since turn ended
+  rm -f "$SIGNALS_DIR/$SESSION_ID.working.json"
   rm -f "$SIGNALS_DIR/$SESSION_ID.permission.json"
 fi

@@ -33,6 +33,11 @@ export interface SessionEndSignal {
   ended_at: string;
 }
 
+export interface WorkingSignal {
+  session_id: string;
+  working_since: string;
+}
+
 export interface SessionState {
   sessionId: string;
   filepath: string;
@@ -51,6 +56,8 @@ export interface SessionState {
   branchChanged?: boolean;
   // Pending permission from PermissionRequest hook
   pendingPermission?: PendingPermission;
+  // True when UserPromptSubmit hook has fired (user started turn)
+  hasWorkingSignal?: boolean;
   // True when Stop hook has fired (Claude's turn definitively ended)
   hasStopSignal?: boolean;
   // True when SessionEnd hook has fired (session closed)
@@ -68,6 +75,7 @@ export class SessionWatcher extends EventEmitter {
   private signalWatcher: FSWatcher | null = null;
   private sessions = new Map<string, SessionState>();
   private pendingPermissions = new Map<string, PendingPermission>();
+  private workingSignals = new Map<string, WorkingSignal>();
   private stopSignals = new Map<string, StopSignal>();
   private endedSignals = new Map<string, SessionEndSignal>();
   private debounceTimers = new Map<string, NodeJS.Timeout>();
@@ -91,6 +99,13 @@ export class SessionWatcher extends EventEmitter {
    */
   getPendingPermission(sessionId: string): PendingPermission | undefined {
     return this.pendingPermissions.get(sessionId);
+  }
+
+  /**
+   * Check if a session has a working signal (turn in progress).
+   */
+  hasWorkingSignal(sessionId: string): boolean {
+    return this.workingSignals.has(sessionId);
   }
 
   /**
@@ -189,11 +204,11 @@ export class SessionWatcher extends EventEmitter {
    * Parse signal filename to extract session ID and signal type.
    * Format: <session_id>.<type>.json (e.g., abc123.permission.json)
    */
-  private parseSignalFilename(filepath: string): { sessionId: string; type: "permission" | "stop" | "ended" } | null {
+  private parseSignalFilename(filepath: string): { sessionId: string; type: "working" | "permission" | "stop" | "ended" } | null {
     const filename = filepath.split("/").pop() || "";
-    const match = filename.match(/^(.+)\.(permission|stop|ended)\.json$/);
+    const match = filename.match(/^(.+)\.(working|permission|stop|ended)\.json$/);
     if (!match) return null;
-    return { sessionId: match[1], type: match[2] as "permission" | "stop" | "ended" };
+    return { sessionId: match[1], type: match[2] as "working" | "permission" | "stop" | "ended" };
   }
 
   /**
@@ -209,7 +224,27 @@ export class SessionWatcher extends EventEmitter {
       const content = await readFile(filepath, "utf-8");
       const data = JSON.parse(content);
 
-      if (type === "permission") {
+      if (type === "working") {
+        const workingSignal = data as WorkingSignal;
+        log("Watcher", `Working signal for session ${sessionId}`);
+        this.workingSignals.set(sessionId, workingSignal);
+        // Clear stop signal since new turn is starting
+        this.stopSignals.delete(sessionId);
+
+        // Update session to working
+        const session = this.sessions.get(sessionId);
+        if (session) {
+          const previousStatus = session.status;
+          session.hasWorkingSignal = true;
+          session.hasStopSignal = false;
+          session.status = {
+            ...session.status,
+            status: "working",
+            hasPendingToolUse: false,
+          };
+          this.emit("session", { type: "updated", session, previousStatus } satisfies SessionEvent);
+        }
+      } else if (type === "permission") {
         const permission = data as PendingPermission;
         log("Watcher", `Pending permission for session ${sessionId}: ${permission.tool_name}`);
         this.pendingPermissions.set(sessionId, permission);
@@ -230,13 +265,15 @@ export class SessionWatcher extends EventEmitter {
         const stopSignal = data as StopSignal;
         log("Watcher", `Stop signal for session ${sessionId}`);
         this.stopSignals.set(sessionId, stopSignal);
-        // Clear any pending permission since turn ended
+        // Clear working and permission signals since turn ended
+        this.workingSignals.delete(sessionId);
         this.pendingPermissions.delete(sessionId);
 
-        // Update session to waiting_for_input
+        // Update session to waiting
         const session = this.sessions.get(sessionId);
         if (session) {
           const previousStatus = session.status;
+          session.hasWorkingSignal = false;
           session.hasStopSignal = true;
           session.pendingPermission = undefined;
           session.status = {
@@ -251,6 +288,7 @@ export class SessionWatcher extends EventEmitter {
         log("Watcher", `Session ended signal for ${sessionId}`);
         this.endedSignals.set(sessionId, endSignal);
         // Clear all signals for this session
+        this.workingSignals.delete(sessionId);
         this.pendingPermissions.delete(sessionId);
         this.stopSignals.delete(sessionId);
 
@@ -258,8 +296,9 @@ export class SessionWatcher extends EventEmitter {
         const session = this.sessions.get(sessionId);
         if (session) {
           const previousStatus = session.status;
-          session.hasEndedSignal = true;
+          session.hasWorkingSignal = false;
           session.hasStopSignal = false;
+          session.hasEndedSignal = true;
           session.pendingPermission = undefined;
           session.status = {
             ...session.status,
@@ -284,7 +323,13 @@ export class SessionWatcher extends EventEmitter {
     const { sessionId, type } = parsed;
     log("Watcher", `Signal removed for session ${sessionId}: ${type}`);
 
-    if (type === "permission") {
+    if (type === "working") {
+      this.workingSignals.delete(sessionId);
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        session.hasWorkingSignal = false;
+      }
+    } else if (type === "permission") {
       this.pendingPermissions.delete(sessionId);
       const session = this.sessions.get(sessionId);
       if (session && session.pendingPermission) {
@@ -508,20 +553,30 @@ export class SessionWatcher extends EventEmitter {
         await this.clearStopSignal(sessionId);
       }
 
-      // Derive status from all entries
+      // Derive base status from JSONL entries (for metadata like messageCount)
       let status = deriveStatus(allEntries);
       const previousStatus = existingSession?.status;
 
-      // Check for pending permission from hook
+      // Hook signals are authoritative for status - override JSONL-derived status
       const pendingPermission = this.pendingPermissions.get(sessionId);
-      if (pendingPermission) {
-        // Override status to show pending approval
-        status = {
-          ...status,
-          status: "waiting",
-          hasPendingToolUse: true,
-        };
+      const hasWorkingSig = this.workingSignals.has(sessionId);
+      const hasStopSig = this.stopSignals.has(sessionId);
+      const hasEndedSig = this.endedSignals.has(sessionId);
+
+      if (hasEndedSig) {
+        // Session ended - idle
+        status = { ...status, status: "idle", hasPendingToolUse: false };
+      } else if (pendingPermission) {
+        // Waiting for permission approval
+        status = { ...status, status: "waiting", hasPendingToolUse: true };
+      } else if (hasStopSig) {
+        // Claude's turn ended - waiting for user
+        status = { ...status, status: "waiting", hasPendingToolUse: false };
+      } else if (hasWorkingSig) {
+        // User started turn - working
+        status = { ...status, status: "working", hasPendingToolUse: false };
       }
+      // If no hook signals, use JSONL-derived status (fallback for sessions without hooks)
 
       // Build session state - prefer branch from git info over log entry
       const session: SessionState = {
@@ -539,8 +594,9 @@ export class SessionWatcher extends EventEmitter {
         gitRepoId: gitInfo.repoId,
         branchChanged,
         pendingPermission,
-        hasStopSignal: this.stopSignals.has(sessionId),
-        hasEndedSignal: this.endedSignals.has(sessionId),
+        hasWorkingSignal: hasWorkingSig,
+        hasStopSignal: hasStopSig,
+        hasEndedSignal: hasEndedSig,
       };
 
       // Store session

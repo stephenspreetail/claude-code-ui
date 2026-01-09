@@ -1,9 +1,10 @@
 #!/bin/bash
 # Setup script for claude-code-ui daemon hooks
 # Installs hooks for accurate session state detection:
+# - UserPromptSubmit: detect when user starts a turn (working)
 # - PermissionRequest: detect when waiting for user approval
-# - Stop: detect when Claude finishes responding
-# - SessionEnd: detect when session closes
+# - Stop: detect when Claude finishes responding (waiting)
+# - SessionEnd: detect when session closes (idle)
 
 set -e
 
@@ -35,6 +36,8 @@ cp "$SETTINGS_FILE" "$SETTINGS_FILE.backup"
 echo "Backed up settings to $SETTINGS_FILE.backup"
 
 # Build the hooks configuration
+# UserPromptSubmit: write working signal when user starts turn
+USER_PROMPT_HOOK="$SCRIPT_DIR/hooks/user-prompt-submit.sh"
 # PermissionRequest: write pending permission file
 PERMISSION_HOOK="$SCRIPT_DIR/hooks/permission-request.sh"
 # Stop: write turn-ended signal
@@ -43,9 +46,11 @@ STOP_HOOK="$SCRIPT_DIR/hooks/stop.sh"
 SESSION_END_HOOK="$SCRIPT_DIR/hooks/session-end.sh"
 
 # Add all hooks
-jq --arg perm "$PERMISSION_HOOK" \
+jq --arg prompt "$USER_PROMPT_HOOK" \
+   --arg perm "$PERMISSION_HOOK" \
    --arg stop "$STOP_HOOK" \
    --arg end "$SESSION_END_HOOK" '
+  .hooks.UserPromptSubmit = [{"matcher": "", "hooks": [{"type": "command", "command": $prompt}]}] |
   .hooks.PermissionRequest = [{"matcher": "", "hooks": [{"type": "command", "command": $perm}]}] |
   .hooks.Stop = [{"matcher": "", "hooks": [{"type": "command", "command": $stop}]}] |
   .hooks.SessionEnd = [{"matcher": "", "hooks": [{"type": "command", "command": $end}]}]
@@ -53,9 +58,10 @@ jq --arg perm "$PERMISSION_HOOK" \
 mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
 
 echo "Added hooks to $SETTINGS_FILE:"
+echo "  - UserPromptSubmit (detect turn started → working)"
 echo "  - PermissionRequest (detect approval needed)"
-echo "  - Stop (detect turn ended)"
-echo "  - SessionEnd (detect session closed)"
+echo "  - Stop (detect turn ended → waiting)"
+echo "  - SessionEnd (detect session closed → idle)"
 echo ""
 echo "Setup complete! The daemon will now accurately track session states."
 echo ""
