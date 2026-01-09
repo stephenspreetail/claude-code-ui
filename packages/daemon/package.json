@@ -12,7 +12,8 @@
     "watch:active": "tsx src/cli.ts --active",
     "build": "tsc",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "setup": "./scripts/setup-hooks.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",

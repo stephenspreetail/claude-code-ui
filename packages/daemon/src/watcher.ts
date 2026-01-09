@@ -1,5 +1,7 @@
 import { watch, type FSWatcher } from "chokidar";
 import { EventEmitter } from "node:events";
+import { readFile, unlink, readdir } from "node:fs/promises";
+import { join } from "node:path";
 import {
   tailJSONL,
   extractMetadata,
@@ -12,6 +14,14 @@ import type { LogEntry, SessionMetadata, StatusResult } from "./types.js";
 import { log } from "./log.js";
 
 const CLAUDE_PROJECTS_DIR = `${process.env.HOME}/.claude/projects`;
+const PENDING_PERMISSIONS_DIR = `${process.env.HOME}/.claude/pending-permissions`;
+
+export interface PendingPermission {
+  session_id: string;
+  tool_name: string;
+  tool_input?: Record<string, unknown>;
+  pending_since: string;
+}
 
 export interface SessionState {
   sessionId: string;
@@ -29,6 +39,8 @@ export interface SessionState {
   gitRepoId: string | null;    // owner/repo (for grouping)
   // Set when branch changed since last update
   branchChanged?: boolean;
+  // Pending permission from PermissionRequest hook
+  pendingPermission?: PendingPermission;
 }
 
 export interface SessionEvent {
@@ -39,7 +51,9 @@ export interface SessionEvent {
 
 export class SessionWatcher extends EventEmitter {
   private watcher: FSWatcher | null = null;
+  private permissionWatcher: FSWatcher | null = null;
   private sessions = new Map<string, SessionState>();
+  private pendingPermissions = new Map<string, PendingPermission>();
   private debounceTimers = new Map<string, NodeJS.Timeout>();
   private debounceMs: number;
   private staleCheckInterval: NodeJS.Timeout | null = null;
@@ -47,6 +61,20 @@ export class SessionWatcher extends EventEmitter {
   constructor(options: { debounceMs?: number } = {}) {
     super();
     this.debounceMs = options.debounceMs ?? 200;
+  }
+
+  /**
+   * Check if a session has a pending permission request.
+   */
+  hasPendingPermission(sessionId: string): boolean {
+    return this.pendingPermissions.has(sessionId);
+  }
+
+  /**
+   * Get pending permission for a session.
+   */
+  getPendingPermission(sessionId: string): PendingPermission | undefined {
+    return this.pendingPermissions.get(sessionId);
   }
 
   async start(): Promise<void> {
@@ -72,10 +100,37 @@ export class SessionWatcher extends EventEmitter {
       .on("unlink", (path) => this.handleDelete(path))
       .on("error", (error) => this.emit("error", error));
 
+    // Watch pending permissions directory for PermissionRequest hook output
+    this.permissionWatcher = watch(PENDING_PERMISSIONS_DIR, {
+      persistent: true,
+      ignoreInitial: false,
+      depth: 0,
+    });
+
+    this.permissionWatcher
+      .on("add", (path) => {
+        if (!path.endsWith(".json")) return;
+        this.handlePendingPermission(path);
+      })
+      .on("change", (path) => {
+        if (!path.endsWith(".json")) return;
+        this.handlePendingPermission(path);
+      })
+      .on("unlink", (path) => {
+        if (!path.endsWith(".json")) return;
+        this.handlePendingPermissionRemoved(path);
+      })
+      .on("error", () => {
+        // Ignore errors - directory may not exist if hook isn't set up
+      });
+
     // Wait for initial scan to complete
     await new Promise<void>((resolve) => {
       this.watcher!.on("ready", resolve);
     });
+
+    // Load any existing pending permissions
+    await this.loadExistingPendingPermissions();
 
     // Start periodic stale check to detect sessions that have gone idle
     // This catches cases where the turn ends but no turn_duration event is written
@@ -84,10 +139,101 @@ export class SessionWatcher extends EventEmitter {
     }, 10_000); // Check every 10 seconds
   }
 
+  /**
+   * Load any existing pending permission files on startup.
+   */
+  private async loadExistingPendingPermissions(): Promise<void> {
+    try {
+      const files = await readdir(PENDING_PERMISSIONS_DIR);
+      for (const file of files) {
+        if (file.endsWith(".json")) {
+          await this.handlePendingPermission(join(PENDING_PERMISSIONS_DIR, file));
+        }
+      }
+    } catch {
+      // Directory doesn't exist or can't be read - that's fine
+    }
+  }
+
+  /**
+   * Handle a pending permission file being created/updated.
+   */
+  private async handlePendingPermission(filepath: string): Promise<void> {
+    try {
+      const content = await readFile(filepath, "utf-8");
+      const permission = JSON.parse(content) as PendingPermission;
+      const sessionId = permission.session_id;
+
+      if (!sessionId) return;
+
+      log("Watcher", `Pending permission for session ${sessionId}: ${permission.tool_name}`);
+
+      // Store the pending permission
+      this.pendingPermissions.set(sessionId, permission);
+
+      // Update the session if it exists
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        const previousStatus = session.status;
+        session.pendingPermission = permission;
+        // Override status to show pending approval
+        session.status = {
+          ...session.status,
+          status: "waiting",
+          hasPendingToolUse: true,
+        };
+
+        this.emit("session", {
+          type: "updated",
+          session,
+          previousStatus,
+        } satisfies SessionEvent);
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  /**
+   * Handle a pending permission file being removed.
+   */
+  private handlePendingPermissionRemoved(filepath: string): void {
+    // Extract session ID from filename (e.g., abc123.json -> abc123)
+    const filename = filepath.split("/").pop() || "";
+    const sessionId = filename.replace(".json", "");
+
+    if (!sessionId) return;
+
+    log("Watcher", `Pending permission cleared for session ${sessionId}`);
+
+    // Clear the pending permission
+    this.pendingPermissions.delete(sessionId);
+
+    // Update the session if it exists
+    const session = this.sessions.get(sessionId);
+    if (session && session.pendingPermission) {
+      const previousStatus = session.status;
+      session.pendingPermission = undefined;
+      // Re-derive status from entries
+      session.status = deriveStatus(session.entries);
+
+      this.emit("session", {
+        type: "updated",
+        session,
+        previousStatus,
+      } satisfies SessionEvent);
+    }
+  }
+
   stop(): void {
     if (this.watcher) {
       this.watcher.close();
       this.watcher = null;
+    }
+
+    if (this.permissionWatcher) {
+      this.permissionWatcher.close();
+      this.permissionWatcher = null;
     }
 
     // Clear stale check interval
@@ -101,6 +247,22 @@ export class SessionWatcher extends EventEmitter {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
+  }
+
+  /**
+   * Clear a pending permission when tool completes (called when tool_result is seen).
+   */
+  async clearPendingPermission(sessionId: string): Promise<void> {
+    if (!this.pendingPermissions.has(sessionId)) return;
+
+    this.pendingPermissions.delete(sessionId);
+
+    // Try to delete the file
+    try {
+      await unlink(join(PENDING_PERMISSIONS_DIR, `${sessionId}.json`));
+    } catch {
+      // File may already be deleted
+    }
   }
 
   getSessions(): Map<string, SessionState> {
@@ -219,9 +381,35 @@ export class SessionWatcher extends EventEmitter {
         }
       }
 
+      // Check if any new entry is a tool_result - if so, clear pending permission
+      const hasToolResult = newEntries.some((entry) => {
+        if (entry.type === "user") {
+          const content = (entry as { message: { content: unknown } }).message.content;
+          if (Array.isArray(content)) {
+            return content.some((block) => block.type === "tool_result");
+          }
+        }
+        return false;
+      });
+
+      if (hasToolResult && this.pendingPermissions.has(sessionId)) {
+        await this.clearPendingPermission(sessionId);
+      }
+
       // Derive status from all entries
-      const status = deriveStatus(allEntries);
+      let status = deriveStatus(allEntries);
       const previousStatus = existingSession?.status;
+
+      // Check for pending permission from hook
+      const pendingPermission = this.pendingPermissions.get(sessionId);
+      if (pendingPermission) {
+        // Override status to show pending approval
+        status = {
+          ...status,
+          status: "waiting",
+          hasPendingToolUse: true,
+        };
+      }
 
       // Build session state - prefer branch from git info over log entry
       const session: SessionState = {
@@ -238,6 +426,7 @@ export class SessionWatcher extends EventEmitter {
         gitRepoUrl: gitInfo.repoUrl,
         gitRepoId: gitInfo.repoId,
         branchChanged,
+        pendingPermission,
       };
 
       // Store session
