@@ -23,21 +23,21 @@ export type StatusEvent =
   | { type: "ASSISTANT_STREAMING"; timestamp: string }
   | { type: "ASSISTANT_TOOL_USE"; timestamp: string; toolUseIds: string[] }
   | { type: "TURN_END"; timestamp: string }
-  | { type: "IDLE_TIMEOUT" }
   | { type: "APPROVAL_TIMEOUT" }
   | { type: "STALE_TIMEOUT" };
 
-// The four possible status states
-export type StatusState = "idle" | "working" | "waiting_for_approval" | "waiting_for_input";
+// The three possible status states (idle is determined by UI based on elapsed time)
+export type StatusState = "working" | "waiting_for_approval" | "waiting_for_input";
 
 /**
  * State machine for session status.
  *
  * States:
- * - idle: No activity for 5+ minutes
  * - working: Claude is actively processing
  * - waiting_for_approval: Tool use needs user approval
  * - waiting_for_input: Claude finished, waiting for user
+ *
+ * Note: "idle" status is determined by the UI based on elapsed time since lastActivityAt
  */
 export const statusMachine = setup({
   types: {
@@ -55,17 +55,6 @@ export const statusMachine = setup({
     pendingToolIds: [],
   }),
   states: {
-    idle: {
-      on: {
-        USER_PROMPT: {
-          target: "working",
-          actions: ({ context, event }) => {
-            context.lastActivityAt = event.timestamp;
-            context.messageCount += 1;
-          },
-        },
-      },
-    },
     working: {
       on: {
         USER_PROMPT: {
@@ -120,9 +109,6 @@ export const statusMachine = setup({
             context.hasPendingToolUse = false;
           },
         },
-        IDLE_TIMEOUT: {
-          target: "idle",
-        },
       },
     },
     waiting_for_approval: {
@@ -140,9 +126,6 @@ export const statusMachine = setup({
             context.hasPendingToolUse = remaining.length > 0;
           },
         },
-        IDLE_TIMEOUT: {
-          target: "idle",
-        },
       },
     },
     waiting_for_input: {
@@ -154,8 +137,16 @@ export const statusMachine = setup({
             context.messageCount += 1;
           },
         },
-        IDLE_TIMEOUT: {
-          target: "idle",
+        // Handle assistant events for partial logs (e.g., resumed sessions)
+        ASSISTANT_STREAMING: {
+          actions: ({ context, event }) => {
+            context.lastActivityAt = event.timestamp;
+          },
+        },
+        TURN_END: {
+          actions: ({ context, event }) => {
+            context.lastActivityAt = event.timestamp;
+          },
         },
       },
     },
@@ -244,14 +235,11 @@ export function deriveStatusFromMachine(entries: LogEntry[]): {
   const lastActivityTime = context.lastActivityAt ? new Date(context.lastActivityAt).getTime() : 0;
   const timeSinceActivity = now - lastActivityTime;
 
-  const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
   const APPROVAL_TIMEOUT_MS = 5 * 1000; // 5 seconds
   const STALE_TIMEOUT_MS = 60 * 1000; // 60 seconds
 
-  // Apply timeout transitions
-  if (timeSinceActivity > IDLE_TIMEOUT_MS) {
-    actor.send({ type: "IDLE_TIMEOUT" });
-  } else if (stateValue === "working" && context.hasPendingToolUse && timeSinceActivity > APPROVAL_TIMEOUT_MS) {
+  // Apply timeout transitions (idle is handled by the UI based on elapsed time)
+  if (stateValue === "working" && context.hasPendingToolUse && timeSinceActivity > APPROVAL_TIMEOUT_MS) {
     // Tool use pending for too long - should be in waiting_for_approval
     actor.send({ type: "APPROVAL_TIMEOUT" });
   } else if (stateValue === "working" && !context.hasPendingToolUse && timeSinceActivity > STALE_TIMEOUT_MS) {
@@ -271,31 +259,21 @@ export function deriveStatusFromMachine(entries: LogEntry[]): {
 
 /**
  * Map machine status to the existing StatusResult format for compatibility.
+ * Note: "idle" status is determined by the UI based on elapsed time.
  */
 export function machineStatusToResult(
   machineStatus: StatusState,
   context: StatusContext
 ): {
-  status: "working" | "waiting" | "idle";
+  status: "working" | "waiting";
   lastRole: "user" | "assistant";
   hasPendingToolUse: boolean;
   lastActivityAt: string;
   messageCount: number;
 } {
-  // Map the 4 machine states to the 3 UI states
-  let status: "working" | "waiting" | "idle";
-  switch (machineStatus) {
-    case "working":
-      status = "working";
-      break;
-    case "waiting_for_approval":
-    case "waiting_for_input":
-      status = "waiting";
-      break;
-    case "idle":
-      status = "idle";
-      break;
-  }
+  // Map the 3 machine states to 2 UI states (idle is handled by UI)
+  const status: "working" | "waiting" =
+    machineStatus === "working" ? "working" : "waiting";
 
   return {
     status,

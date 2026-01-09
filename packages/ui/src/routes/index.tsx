@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Flex, Text } from "@radix-ui/themes";
+import { useEffect, useState } from "react";
 import { RepoSection } from "../components/RepoSection";
 import { useSessions, groupSessionsByRepo } from "../hooks/useSessions";
 
@@ -9,6 +10,13 @@ export const Route = createFileRoute("/")({
 
 function IndexPage() {
   const { sessions } = useSessions();
+
+  // Force re-render every minute to update relative times and activity scores
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setTick((t) => t + 1), 60_000);
+    return () => clearInterval(interval);
+  }, []);
 
   if (sessions.length === 0) {
     return (

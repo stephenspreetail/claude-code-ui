@@ -1,6 +1,20 @@
 import { Box, Flex, Heading, Link, Text, Separator } from "@radix-ui/themes";
 import { KanbanColumn } from "./KanbanColumn";
-import type { Session } from "../data/schema";
+import type { Session, SessionStatus } from "../data/schema";
+
+const IDLE_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour - match daemon setting
+
+/**
+ * Get effective status based on elapsed time since last activity.
+ * Sessions inactive for 1 hour are considered idle regardless of stored status.
+ */
+function getEffectiveStatus(session: Session): SessionStatus {
+  const elapsed = Date.now() - new Date(session.lastActivityAt).getTime();
+  if (elapsed > IDLE_TIMEOUT_MS) {
+    return "idle";
+  }
+  return session.status;
+}
 
 interface RepoSectionProps {
   repoId: string;
@@ -10,14 +24,15 @@ interface RepoSectionProps {
 }
 
 export function RepoSection({ repoId, repoUrl, sessions, activityScore }: RepoSectionProps) {
-  const working = sessions.filter((s) => s.status === "working");
+  // Use effective status to categorize sessions (accounts for time-based idle)
+  const working = sessions.filter((s) => getEffectiveStatus(s) === "working");
   const needsApproval = sessions.filter(
-    (s) => s.status === "waiting" && s.hasPendingToolUse
+    (s) => getEffectiveStatus(s) === "waiting" && s.hasPendingToolUse
   );
   const waiting = sessions.filter(
-    (s) => s.status === "waiting" && !s.hasPendingToolUse
+    (s) => getEffectiveStatus(s) === "waiting" && !s.hasPendingToolUse
   );
-  const idle = sessions.filter((s) => s.status === "idle");
+  const idle = sessions.filter((s) => getEffectiveStatus(s) === "idle");
 
   const isHot = activityScore > 50;
 

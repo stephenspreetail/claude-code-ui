@@ -8,8 +8,6 @@ import {
   machineStatusToResult,
 } from "./status-machine.js";
 
-const DEFAULT_IDLE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
-
 /**
  * Derive session status from log entries using XState state machine.
  *
@@ -17,12 +15,10 @@ const DEFAULT_IDLE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
  * - "working": Claude is actively processing (streaming or executing tools)
  * - "waiting": Claude finished, waiting for user input or approval
  *   - hasPendingToolUse: true if waiting for tool approval
- * - "idle": No activity for idleThresholdMs
+ *
+ * Note: "idle" status is determined by the UI based on elapsed time since lastActivityAt
  */
-export function deriveStatus(
-  entries: LogEntry[],
-  _idleThresholdMs: number = DEFAULT_IDLE_THRESHOLD_MS,
-): StatusResult {
+export function deriveStatus(entries: LogEntry[]): StatusResult {
   // Use the state machine for status derivation
   const { status: machineStatus, context } = deriveStatusFromMachine(entries);
   return machineStatusToResult(machineStatus, context);
@@ -51,13 +47,11 @@ export function formatStatus(result: StatusResult): string {
   const icons: Record<SessionStatus, string> = {
     working: "🟢",
     waiting: result.hasPendingToolUse ? "🟠" : "🟡",
-    idle: "⚪",
   };
 
   const labels: Record<SessionStatus, string> = {
     working: "Working",
     waiting: result.hasPendingToolUse ? "Tool pending" : "Waiting for input",
-    idle: "Idle",
   };
 
   return `${icons[result.status]} ${labels[result.status]}`;

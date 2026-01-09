@@ -111,8 +111,15 @@ function logSessionEvent(event: SessionEvent): void {
   }
 }
 
+const IDLE_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour - match UI setting
+
+function isSessionIdle(session: SessionState): boolean {
+  const elapsed = Date.now() - new Date(session.status.lastActivityAt).getTime();
+  return elapsed > IDLE_THRESHOLD_MS;
+}
+
 function shouldShowSession(session: SessionState): boolean {
-  if (showOnlyActive && session.status.status === "idle") {
+  if (showOnlyActive && isSessionIdle(session)) {
     return false;
   }
   if (showOnlyRecent) {

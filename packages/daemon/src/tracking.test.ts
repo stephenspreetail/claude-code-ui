@@ -199,8 +199,9 @@ describe("Session Tracking", () => {
       expect(status.hasPendingToolUse).toBe(true);
     });
 
-    it("should detect idle status after timeout", async () => {
+    it("should report waiting status for old sessions (idle determined by UI)", async () => {
       // Create entry from 10 minutes ago
+      // Note: idle status is now determined by the UI based on elapsed time
       const oldTime = new Date(Date.now() - 10 * 60 * 1000).toISOString();
       const entry = createAssistantEntry("Old response", oldTime);
       await writeFile(TEST_LOG_FILE, entry);
@@ -208,7 +209,9 @@ describe("Session Tracking", () => {
       const { entries } = await tailJSONL(TEST_LOG_FILE, 0);
       const status = deriveStatus(entries);
 
-      expect(status.status).toBe("idle");
+      // Daemon reports "waiting" - UI will show as "idle" based on elapsed time
+      expect(status.status).toBe("waiting");
+      expect(status.lastActivityAt).toBe(oldTime);
     });
 
     it("should transition to waiting_for_approval after tool use timeout", async () => {
