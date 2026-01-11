@@ -124,6 +124,20 @@ export ANTHROPIC_API_KEY=sk-ant-...
 pnpm start
 ```
 
+## Windows Support
+
+This project now includes full Windows compatibility. The setup script and all hooks are implemented in Node.js, eliminating the need for bash or external tools like `jq`.
+
+### What Changed for Windows
+
+Previous versions required bash and `jq` for the setup process, which didn't work natively on Windows. The following improvements were made:
+
+- **Cross-platform setup script**: `setup-hooks.js` replaces the bash script with a Node.js implementation
+- **Node.js hook scripts**: All hook scripts (`user-prompt-submit.js`, `permission-request.js`, `stop.js`, `session-end.js`) are now pure Node.js
+- **No external dependencies**: No need to install WSL, Git Bash, or `jq`
+
+The `pnpm run setup` command now works seamlessly on Windows, macOS, and Linux.
+
 ## Development
 
 ```bash
